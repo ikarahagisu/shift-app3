@@ -1,0 +1,173 @@
+
+import io
+from datetime import date
+import pandas as pd
+import streamlit as st
+
+from scheduler import (
+    ROLE_CODES,
+    ROLE_LABELS,
+    build_month_schedule,
+    create_empty_fixed_assignments,
+    create_sample_doctors,
+    create_sample_role_limits,
+    month_options_from_2026_04,
+    schedule_to_dataframe,
+)
+
+st.set_page_config(page_title="医師シフト作成アプリ", layout="wide")
+
+st.title("医師シフト作成アプリ")
+st.caption("2026年4月以降の月次シフトを作成します。固定入力は必ず優先し、残りを自動作成します。")
+
+with st.sidebar:
+    st.header("1. 対象月")
+    month_label = st.selectbox("作成する月", month_options_from_2026_04())
+    year = int(month_label.split("-")[0])
+    month = int(month_label.split("-")[1])
+
+    st.header("2. 重み設定")
+    wish_weight = st.slider("希望日を優先する重み", 1, 50, 10)
+    doctor_priority_weight = st.slider("先生ごとの優先度の重み", 0, 20, 3)
+    monthly_min_penalty = st.slider("月間最小回数未達のペナルティ", 1, 100, 25)
+    spacing_penalty = st.slider("最低空け日数違反のペナルティ", 1, 200, 40)
+    fairness_weight = st.slider("回数の偏りを抑える重み", 0, 20, 3)
+    timeout_sec = st.slider("探索時間（秒）", 5, 120, 20)
+
+st.markdown("### 先生設定CSV")
+st.write(
+    """
+必要列:
+- doctor: 先生名
+- priority: 先生優先度（大きいほど優先）
+- min_gap_days: 最低空ける日数
+- monthly_min: 月間最小回数
+- monthly_max: 月間最大回数
+- ng_dates: NG日付を `2026-04-03;2026-04-10` のようにセミコロン区切り
+- wish_dates: 希望日付を `2026-04-05;2026-04-19` のようにセミコロン区切り
+- wish_priorities: 希望優先度を wish_dates と同じ順で `5;2` のように記載
+"""
+)
+
+col1, col2 = st.columns(2)
+with col1:
+    doctors_file = st.file_uploader("doctors.csv をアップロード", type=["csv"], key="doctors")
+with col2:
+    st.download_button(
+        "先生設定サンプルCSVをダウンロード",
+        create_sample_doctors().to_csv(index=False).encode("utf-8-sig"),
+        file_name="sample_doctors.csv",
+        mime="text/csv",
+    )
+
+st.markdown("### 各枠ごとの最大回数CSV")
+st.write(
+    """
+必要列:
+- doctor
+- 宿直A
+- 宿直B
+- 外来宿直
+- 日直A
+- 日直B
+- 外来日直
+"""
+)
+
+col3, col4 = st.columns(2)
+with col3:
+    role_limits_file = st.file_uploader("role_limits.csv をアップロード", type=["csv"], key="role_limits")
+with col4:
+    st.download_button(
+        "各枠上限サンプルCSVをダウンロード",
+        create_sample_role_limits().to_csv(index=False).encode("utf-8-sig"),
+        file_name="sample_role_limits.csv",
+        mime="text/csv",
+    )
+
+st.markdown("### 固定入力CSV（絶対に通す割当）")
+st.write(
+    """
+必要列:
+- date: 日付（例 2026-04-05）
+- role: 宿直A / 宿直B / 外来宿直 / 日直A / 日直B / 外来日直
+- doctor: 担当する先生名
+"""
+)
+
+col5, col6 = st.columns(2)
+with col5:
+    fixed_file = st.file_uploader("fixed_assignments.csv をアップロード", type=["csv"], key="fixed")
+with col6:
+    st.download_button(
+        "固定入力サンプルCSVをダウンロード",
+        create_empty_fixed_assignments(year, month).to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"fixed_assignments_{year}_{month:02d}.csv",
+        mime="text/csv",
+    )
+
+st.markdown("---")
+run = st.button("シフトを作成", type="primary", use_container_width=True)
+
+def read_csv_or_error(uploaded_file, label: str):
+    if uploaded_file is None:
+        st.error(f"{label} をアップロードしてください。")
+        return None
+    try:
+        return pd.read_csv(uploaded_file)
+    except Exception as e:
+        st.error(f"{label} の読み込みに失敗しました: {e}")
+        return None
+
+if run:
+    doctors_df = read_csv_or_error(doctors_file, "doctors.csv")
+    role_limits_df = read_csv_or_error(role_limits_file, "role_limits.csv")
+    fixed_df = pd.read_csv(fixed_file) if fixed_file is not None else create_empty_fixed_assignments(year, month)
+
+    if doctors_df is not None and role_limits_df is not None:
+        with st.spinner("制約を満たすシフトを探索中です..."):
+            result = build_month_schedule(
+                year=year,
+                month=month,
+                doctors_df=doctors_df,
+                role_limits_df=role_limits_df,
+                fixed_assignments_df=fixed_df,
+                wish_weight=wish_weight,
+                doctor_priority_weight=doctor_priority_weight,
+                monthly_min_penalty=monthly_min_penalty,
+                spacing_penalty=spacing_penalty,
+                fairness_weight=fairness_weight,
+                timeout_sec=timeout_sec,
+            )
+
+        if not result["success"]:
+            st.error("シフトを作成できませんでした。")
+            st.write(result["message"])
+            if result.get("diagnostics"):
+                st.markdown("#### 診断情報")
+                st.json(result["diagnostics"])
+        else:
+            schedule_df = schedule_to_dataframe(result["assignments"])
+            st.success("シフトを作成しました。")
+            st.markdown("#### シフト表")
+            st.dataframe(schedule_df, use_container_width=True, hide_index=True)
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("#### 先生別集計")
+                st.dataframe(pd.DataFrame(result["doctor_summary"]), use_container_width=True, hide_index=True)
+            with col_b:
+                st.markdown("#### 枠別集計")
+                st.dataframe(pd.DataFrame(result["role_summary"]), use_container_width=True, hide_index=True)
+
+            csv_data = schedule_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "結果CSVをダウンロード",
+                csv_data,
+                file_name=f"shift_{year}_{month:02d}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+            with st.expander("最適化ログ"):
+                st.write(result["message"])

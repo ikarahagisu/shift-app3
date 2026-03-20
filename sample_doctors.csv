@@ -1,0 +1,4 @@
+streamlit>=1.32
+pandas>=2.1
+ortools>=9.10
+holidays>=0.46

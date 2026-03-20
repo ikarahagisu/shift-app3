@@ -1,0 +1,89 @@
+
+# 医師シフト作成アプリ
+
+Streamlit + OR-Tools で作成した、医師の月次シフト作成WEBアプリです。
+
+## 対応要件
+- 2026年4月以降の月ごとのシフト作成
+- 平日: 宿直A / 宿直B / 外来宿直
+- 休日・祝日: 宿直A / 宿直B / 外来宿直 / 日直A / 日直B / 外来日直
+- 先生ごとに以下を設定
+  - NG日付
+  - 希望日
+  - 希望優先度
+  - 最低空ける日数
+  - 月間最小回数
+  - 月間最大回数
+  - 先生ごとの優先度
+- 各枠ごとの先生別最大回数をCSVで設定
+- 固定入力したシフトは絶対に通し、その残りを自動作成
+- 結果CSVダウンロード
+
+## ファイル
+- `app.py`: Streamlit UI
+- `scheduler.py`: シフト最適化ロジック
+- `requirements.txt`: 依存関係
+- `sample_doctors.csv`: 先生設定の例
+- `sample_role_limits.csv`: 各枠上限の例
+
+## ローカル実行
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## CSV仕様
+
+### 1. doctors.csv
+必要列:
+- `doctor`
+- `priority`
+- `min_gap_days`
+- `monthly_min`
+- `monthly_max`
+- `ng_dates`
+- `wish_dates`
+- `wish_priorities`
+
+`ng_dates`, `wish_dates`, `wish_priorities` はセミコロン区切りです。
+
+例:
+```csv
+doctor,priority,min_gap_days,monthly_min,monthly_max,ng_dates,wish_dates,wish_priorities
+田中,3,1,3,8,2026-04-03;2026-04-11,2026-04-05;2026-04-19,5;2
+```
+
+### 2. role_limits.csv
+必要列:
+- `doctor`
+- `宿直A`
+- `宿直B`
+- `外来宿直`
+- `日直A`
+- `日直B`
+- `外来日直`
+
+### 3. fixed_assignments.csv
+必要列:
+- `date`
+- `role`
+- `doctor`
+
+例:
+```csv
+date,role,doctor
+2026-04-05,宿直A,田中
+2026-04-29,日直B,鈴木
+```
+
+## Streamlit Community Cloud に載せる方法
+1. GitHub にこのフォルダ一式を push
+2. Streamlit Community Cloud にログイン
+3. New app からリポジトリを選択
+4. `app.py` をメインファイルに指定
+5. Deploy
+
+## 注意
+- 同じ先生が同日に複数枠へ入らない制約を入れています
+- 固定入力がNG日や無効枠と衝突する場合は解が作れません
+- `min_gap_days` は現状「ソフト制約」です。厳密必須にしたい場合は今後変更可能です
